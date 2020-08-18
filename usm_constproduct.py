@@ -4,10 +4,6 @@ import sys
 import traceback
 
 # Parameters:
-USM_MINT_FEE                        = 0.001
-USM_BURN_FEE                        = 0.002
-FUM_CREATE_FEE                      = 0.001
-FUM_REDEEM_FEE                      = 0.002
 MAX_DEBT_RATIO                      = 0.8           # Eg, if 1,000,000 USM are outstanding, users won't be able to redeem FUM unless the ETH pool's (mid) value is >= $1,000,000 / 0.8 = $1,250,000
 BUY_SELL_ADJUSTMENTS_HALF_LIFE      = 60            # Decay rate of our bid/ask related to recent buy/sell activity (eg, rate of buy price, pushed up by buys, dropping back towards oracle buy price): 1.5 -> 1.2247 -> 1.1067
 MIN_FUM_BUY_PRICE_HALF_LIFE         = 24 * 60 * 60  # min_fum_buy_price_in_eth() drops by 50% every day
@@ -28,7 +24,7 @@ mint_burn_adjustment_stored         = 1         # Price multiplier based on rece
 mint_burn_adjustment_timestamp      = 0
 fund_defund_adjustment_stored       = 1         # Same as above, but for funds (increases factor)/defunds (decreases factor).
 fund_defund_adjustment_timestamp    = 0
-min_fum_buy_price_in_eth_stored     = 0         # Note that this price: 1. is in terms of ETH, not USD/USM; 2. *includes* the FUM creation fee - so be careful not to double-charge by adding it separately.
+min_fum_buy_price_in_eth_stored     = 0         # Note that this price is in terms of ETH, not USD/USM.
 min_fum_buy_price_timestamp         = 0
 
 
@@ -108,7 +104,7 @@ def set_oracle_eth_price(new_price, new_buy_price=None):
         # Set the min FUM buy price (in ETH), to the FUM price in ETH as of the ETH price point where the debt ratio exceeded MAX_DEBT_RATIO.  Eg, suppose pool_eth = 400 and fum_outstanding() = 1,000.  Then, at the moment we exceed MAX_DEBT_RATIO = 0.8, the buffer must contain
         # 400 * (1 - 0.8) = 80 ETH, and therefore the FUM price in ETH is 80 / 1,000 = 0.08.  Eg, suppose USM outstanding = 40,000: then we cross 0.8 at ETH = $125, when total pool value = $50,000, buffer = $10,000, and FUM price = $10,000 / 1,000 = $10 = ($10 / $125) = 0.08 ETH.
         fum_price_in_eth_at_which_we_crossed_max_debt_ratio = (pool_eth * (1 - MAX_DEBT_RATIO)) / fum_outstanding()
-        set_min_fum_buy_price_in_eth_if_needed(fum_price_in_eth_at_which_we_crossed_max_debt_ratio / (1 - FUM_CREATE_FEE))
+        set_min_fum_buy_price_in_eth_if_needed(fum_price_in_eth_at_which_we_crossed_max_debt_ratio)
 
 def mint_usm(user, eth_to_add):
     # Note that minting never pulls us *below* MAX_DEBT_RATIO, since it always moves debt ratio closer to 1.  If debt ratio starts > 1, it stays > 1; if it starts < 1 and > MAX_DEBT_RATIO, it stays > MAX_DEBT_RATIO.
@@ -126,11 +122,11 @@ def mint_usm(user, eth_to_add):
     usm_holdings[user] = usm_holdings.get(user, 0) + usm_minted
     return usm_minted
 
-def burn_usm(user, usm_to_burn, fee=True, check_debt_ratio=True):
+def burn_usm(user, usm_to_burn, check_debt_ratio=True):
     # Note that burning never pushes us over MAX_DEBT_RATIO (which is < 1), since it always moves debt ratio further from 1.  It can pull us *below* MAX_DEBT_RATIO, but if so the top-level call to clear_min_fum_buy_price_if_obsolete() will take care of it once this op is done.
     global pool_eth
     assert usm_to_burn <= usm_holdings.get(user, 0), "{} doesn't own that many USM".format(user)
-    initial_eth_price = calc_eth_price(BUY, fee=fee)
+    initial_eth_price = calc_eth_price(BUY)
     # Burn at a sliding-up price:
     eth_removed = pool_eth * (1 - math.exp(-usm_to_burn / (pool_eth * initial_eth_price)))                          # Math: this is an integral - sum of all USM burned at a sliding price, must match usm_burned_at_sliding_price above
     assert eth_removed <= pool_eth, "Not enough ETH in the pool"
@@ -147,11 +143,11 @@ def create_fum_from_eth(user, eth_to_add):
     global pool_eth
     if fum_outstanding() == 0:
         # This is our very first FUM created, so need to special-case it (otherwise the division below blows up):
-        fum_created = eth_to_add * calc_eth_price(MID)                                                              # No need for any fee or adjustment: the FUM price only matters relative to an existing FUM price, so we can just price the first FUM units at $1
+        fum_created = eth_to_add * calc_eth_price(MID)                                                              # No need for any adjustment: the FUM price only matters relative to an existing FUM price, so we can just price the first FUM units at $1
     else:
         # Create at a sliding-up price:
         initial_fum_price = calc_fum_price(BUY)
-        initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                          # Don't apply fee or adjustment to the ETH price - the fee & adjustment should only be applied as the last step in a transaction, not when used indirectly for pricing as here.
+        initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                          # Don't apply adjustment to the ETH price - the adjustment should only be applied as the last step in a transaction, not when used indirectly for pricing as here.
         pool_eth_growth_factor = (pool_eth + eth_to_add) / pool_eth
         fum_created = pool_eth * initial_eth_price_in_fum * math.log(pool_eth_growth_factor)                        # Math: this is an integral - sum of all FUM created at a sliding-up FUM price
         set_fund_defund_adjustment(fund_defund_adjustment() * pool_eth_growth_factor)
@@ -160,8 +156,8 @@ def create_fum_from_eth(user, eth_to_add):
     return fum_created
 
 def create_fum_from_usm(user, usm_to_convert):
-    # To avoid duplication, just implement this as a call to burn_usm() (with 0 fee, and bypassing the debt ratio check), followed by a call to create_fum_from_eth().  This is a bit hazardous because we could die on an error with half the operation complete, but good enough for govt work:
-    eth_converted = burn_usm(user, usm_to_convert, fee=False, check_debt_ratio=False)
+    # To avoid duplication, just implement this as a call to burn_usm() (bypassing the debt ratio check), followed by a call to create_fum_from_eth().  This is a bit hazardous because we could die on an error with half the operation complete, but good enough for govt work:
+    eth_converted = burn_usm(user, usm_to_convert, check_debt_ratio=False)
     clear_min_fum_buy_price_if_obsolete()                                                                           # Important so that, if the preceding burn brought us below MAX_DEBT_RATIO, we clear the min FUM buy price before starting the fund operation
     return create_fum_from_eth(user, eth_converted)
 
@@ -169,7 +165,7 @@ def redeem_fum(user, fum_to_redeem):
     global pool_eth
     assert fum_to_redeem <= fum_holdings.get(user, 0), "{} doesn't own that many FUM".format(user)
     initial_fum_price = calc_fum_price(SELL)
-    initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                              # Don't apply fee or adjustment to the ETH price - see similar comment above.
+    initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                              # Don't apply adjustment to the ETH price - see similar comment above.
     eth_removed = pool_eth * (1 - math.exp(-fum_to_redeem / (pool_eth * initial_eth_price_in_fum)))                 # Math: see closely analogous comment in burn_usm() above
     assert debt_ratio(eth=pool_eth - eth_removed) <= MAX_DEBT_RATIO, "Redeeming {:,} FUM would leave the debt ratio above {:.0%}".format(fum_to_redeem, MAX_DEBT_RATIO)
     # Since we've disallowed redeem operations that would push us over MAX_DEBT_RATIO, we don't need to handle that case.  And a redeem can never pull us under MAX_DEBT_RATIO either, because it increases debt ratio.
@@ -184,8 +180,8 @@ def set_min_fum_buy_price_in_eth_if_needed(price_in_eth=None):
     if min_fum_buy_price_needs_setting():
         eth_price = calc_eth_price(MID)
         if price_in_eth is None:
-            # If no price is passed in, set it to the current theoretical FUM price (without adjustments, but with the fee), in ETH:
-            price_in_usd = calc_fum_price(BUY, fee=True, adjusted=False, mfbp=False)
+            # If no price is passed in, set it to the current theoretical FUM price (without adjustments), in ETH:
+            price_in_usd = calc_fum_price(BUY, adjusted=False, mfbp=False)
             price_in_eth = price_in_usd / eth_price
         else:
             price_in_usd = price_in_eth * eth_price
@@ -241,51 +237,42 @@ def debt_ratio(eth=None, usm=None):
     else:
         return usm / pool_value(eth=eth)
 
-def calc_eth_price(side, fee=True, adjusted=True):
+def calc_eth_price(side, adjusted=True):
     assert side in (MID, BUY, SELL)
     if side == BUY:
         price = oracle_eth_buy_price
         if adjusted:
             price *= max(1, mint_burn_adjustment()) * max(1, fund_defund_adjustment())
-        if fee:
-            price /= (1 - USM_BURN_FEE)
     elif side == SELL:
         price = oracle_eth_sell_price
         if adjusted:
             price *= min(1, mint_burn_adjustment()) * min(1, fund_defund_adjustment())
-        if fee:
-            price *= (1 - USM_MINT_FEE)
     else:
         price = (oracle_eth_sell_price + oracle_eth_buy_price) / 2
     return price
 
-def calc_fum_price(side, fee=True, adjusted=True, mfbp=True):
+def calc_fum_price(side, adjusted=True, mfbp=True):
     assert side in (MID, BUY, SELL)
     if fum_outstanding() == 0:
-        return 1 if side == BUY else math.nan                                       # If we're pricing our first FUM purchase, just price them at $1, skipping fee and adjustment
+        return 1 if side == BUY else math.nan                                       # If we're pricing our first FUM purchase, just price them at $1, skipping adjustment
     else:
-        eth_price = calc_eth_price(side, fee=False, adjusted=False)                 # fee=False, adjusted=False because we apply those directly to the FUM price below, not to the ETH price used to calculate the buffer value - that would exaggerate the fee too much
+        eth_price = calc_eth_price(side, adjusted=False)                            # adjusted=False because we apply that directly to the FUM price below, not to the ETH price used to calculate the buffer value - that would exaggerate the fee too much
         price = buffer_value(eth_price=eth_price) / fum_outstanding()
 
     if side == BUY:
         if adjusted:
             price *= max(1, mint_burn_adjustment()) * max(1, fund_defund_adjustment())
-        if fee:
-            price /= (1 - FUM_CREATE_FEE)
         if mfbp:
             price = max(price, min_fum_buy_price_in_eth() * calc_eth_price(MID))
     elif side == SELL:
         if adjusted:
             price *= min(1, mint_burn_adjustment()) * min(1, fund_defund_adjustment())
-        if fee:
-            price *= (1 - FUM_REDEEM_FEE)
-
     return price
 
-def calc_usm_price(side, fee=True, adjusted=True):
+def calc_usm_price(side, adjusted=True):
     assert side in (MID, BUY, SELL)
     eth_side = {BUY: SELL, SELL: BUY, MID: MID}[side]
-    return calc_eth_price(MID) / calc_eth_price(eth_side, fee=fee, adjusted=adjusted)
+    return calc_eth_price(MID) / calc_eth_price(eth_side, adjusted=adjusted)
 
 def min_fum_buy_price_needs_setting():
     return min_fum_buy_price_in_eth() == 0 and debt_ratio() > MAX_DEBT_RATIO and fum_outstanding() > 0
