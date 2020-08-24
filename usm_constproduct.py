@@ -284,10 +284,10 @@ def min_fum_buy_price_in_eth():
         return min_fum_buy_price_in_eth_stored * (0.5 ** ((time - min_fum_buy_price_timestamp) / MIN_FUM_BUY_PRICE_HALF_LIFE))
 
 def mint_burn_adjustment():
-    return mint_burn_adjustment_stored ** 2**-((time - mint_burn_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE)
+    return mint_burn_adjustment_stored ** (0.5 ** ((time - mint_burn_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE))
 
 def fund_defund_adjustment():
-    return fund_defund_adjustment_stored ** 2**-((time - fund_defund_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE)
+    return fund_defund_adjustment_stored ** (0.5 ** ((time - fund_defund_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE))
 
 
 main()
