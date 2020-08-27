@@ -3,6 +3,8 @@ import math
 import sys
 import traceback
 
+# ________________________________________ Constants ________________________________________
+
 # Parameters:
 MAX_DEBT_RATIO                      = 0.8           # Eg, if 1,000,000 USM are outstanding, users won't be able to redeem FUM unless the ETH pool's (mid) value is >= $1,000,000 / 0.8 = $1,250,000
 BUY_SELL_ADJUSTMENTS_HALF_LIFE      = 60            # Decay rate of our bid/ask related to recent buy/sell activity (eg, rate of buy price, pushed up by buys, dropping back towards oracle buy price): 1.5 -> 1.2247 -> 1.1067
@@ -19,7 +21,9 @@ SHIFT                               = 32            # Number of binary digits by
 ONE_TENTH_SHIFTED                   = 429496730
 HALF_TO_THE_ONE_TENTH_SHIFTED       = 4007346185
 
-# State:
+
+# ________________________________________ State variables ________________________________________
+
 time                                = datetime(2020, 8, 1, tzinfo=timezone.utc).timestamp()
 oracle_eth_buy_price                = 202
 oracle_eth_sell_price               = 198
@@ -32,6 +36,7 @@ fund_defund_adjustment_stored       = 1             # Same as above, but for fun
 fund_defund_adjustment_timestamp    = 0
 min_fum_buy_price_in_eth_stored     = 0             # Note that this price is in terms of ETH, not USD/USM.
 min_fum_buy_price_timestamp         = 0
+
 
 # ________________________________________ Main loop ________________________________________
 
