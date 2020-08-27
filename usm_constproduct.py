@@ -13,6 +13,12 @@ MID                                 = 'mid'
 BUY                                 = 'buy'
 SELL                                = 'sell'
 
+# Gas-saving approximation constants:
+APPROXIMATE_TO_SAVE_GAS             = False         # Switch to True for less accurate, but (hopefully) more gas-efficient calculations
+SHIFT                               = 32            # Number of binary digits by which fixed-decimal inputs & outputs are shifted.
+ONE_TENTH_SHIFTED                   = 429496730
+HALF_TO_THE_ONE_TENTH_SHIFTED       = 4007346185
+
 # State:
 time                                = datetime(2020, 8, 1, tzinfo=timezone.utc).timestamp()
 oracle_eth_buy_price                = 202
@@ -26,12 +32,6 @@ fund_defund_adjustment_stored       = 1             # Same as above, but for fun
 fund_defund_adjustment_timestamp    = 0
 min_fum_buy_price_in_eth_stored     = 0             # Note that this price is in terms of ETH, not USD/USM.
 min_fum_buy_price_timestamp         = 0
-
-# Gas-saving approximation constants:
-APPROXIMATE_TO_SAVE_GAS             = False         # Switch to True for less accurate, but (hopefully) more gas-efficient calculations
-SHIFT                               = 32            # Number of binary digits by which fixed-decimal inputs & outputs are shifted.
-ONE_TENTH_SHIFTED                   = 429496730
-HALF_TO_THE_ONE_TENTH_SHIFTED       = 4007346185
 
 # ________________________________________ Main loop ________________________________________
 
