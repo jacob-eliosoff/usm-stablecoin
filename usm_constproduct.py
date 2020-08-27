@@ -119,10 +119,10 @@ def mint_usm(user, eth_to_add):
         # This is our very first ETH in the pool, so need to special-case it (otherwise the division below blows up):
         usm_minted = eth_to_add * initial_eth_price
     else:
-        # Mint at a sliding-down ETH price (ie, buy USM at a sliding-up USM price):
+        # Mint at a sliding-down ETH price (ie, buy USM at a sliding-up USM price).  **BASIC RULE:** anytime pool_eth changes by factor k, eth_price changes by factor 1/k**2.  (Earlier versions of this logic scaled price by 1/k, not 1/k**2; but that results in calls to log()/exp().)
         pool_eth_growth_factor = (pool_eth + eth_to_add) / pool_eth
-        usm_minted = pool_eth * initial_eth_price * math.log(pool_eth_growth_factor)                                # Math: this is an integral - sum of all USM minted at a sliding-down ETH price
-        set_mint_burn_adjustment(mint_burn_adjustment() / pool_eth_growth_factor)
+        usm_minted = pool_eth * initial_eth_price * (1 - 1 / pool_eth_growth_factor)                                # Math: this is an integral - sum of all USM minted at a sliding-down ETH price
+        set_mint_burn_adjustment(mint_burn_adjustment() / pool_eth_growth_factor**2)
     pool_eth += eth_to_add
     usm_holdings[user] = usm_holdings.get(user, 0) + usm_minted
     return usm_minted
@@ -133,12 +133,12 @@ def burn_usm(user, usm_to_burn, check_debt_ratio=True):
     assert usm_to_burn <= usm_holdings.get(user, 0), "{} doesn't own that many USM".format(user)
     initial_eth_price = calc_eth_price(BUY)
     # Burn at a sliding-up price:
-    eth_removed = pool_eth * (1 - math.exp(-usm_to_burn / (pool_eth * initial_eth_price)))                          # Math: this is an integral - sum of all USM burned at a sliding price, must match usm_burned_at_sliding_price above
+    eth_removed = usm_to_burn / (initial_eth_price + usm_to_burn / pool_eth)                                        # Math: this is an integral - sum of all USM burned at a sliding price.  Follows the same mathematical invariant as above: if pool_eth *= k, eth_price *= 1/k**2.
     assert eth_removed <= pool_eth, "Not enough ETH in the pool"
     if check_debt_ratio:
         assert debt_ratio(eth=pool_eth - eth_removed, usm=usm_outstanding() - usm_to_burn) <= 1, "Burning {:,} USM would leave the debt ratio above 100%".format(usm_to_burn)   # Note: the risk is not this burn op pushing us over 100%, but that a previous price drop might have done so!
     pool_eth_shrink_factor = (pool_eth - eth_removed) / pool_eth
-    set_mint_burn_adjustment(mint_burn_adjustment() / pool_eth_shrink_factor)
+    set_mint_burn_adjustment(mint_burn_adjustment() / pool_eth_shrink_factor**2)
     usm_holdings[user] -= usm_to_burn
     pool_eth -= eth_removed
     return eth_removed
@@ -154,8 +154,8 @@ def create_fum_from_eth(user, eth_to_add):
         initial_fum_price = calc_fum_price(BUY)
         initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                          # Don't apply adjustment to the ETH price - the adjustment should only be applied as the last step in a transaction, not when used indirectly for pricing as here.
         pool_eth_growth_factor = (pool_eth + eth_to_add) / pool_eth
-        fum_created = pool_eth * initial_eth_price_in_fum * math.log(pool_eth_growth_factor)                        # Math: this is an integral - sum of all FUM created at a sliding-up FUM price
-        set_fund_defund_adjustment(fund_defund_adjustment() * pool_eth_growth_factor)
+        fum_created = pool_eth * initial_eth_price_in_fum * (1 - 1 / pool_eth_growth_factor)                        # Math: see closely analogous comment in mint_usm() above
+        set_fund_defund_adjustment(fund_defund_adjustment() * pool_eth_growth_factor**2)
     pool_eth += eth_to_add
     fum_holdings[user] = fum_holdings.get(user, 0) + fum_created
     return fum_created
@@ -171,11 +171,11 @@ def redeem_fum(user, fum_to_redeem):
     assert fum_to_redeem <= fum_holdings.get(user, 0), "{} doesn't own that many FUM".format(user)
     initial_fum_price = calc_fum_price(SELL)
     initial_eth_price_in_fum = calc_eth_price(MID) / initial_fum_price                                              # Don't apply adjustment to the ETH price - see similar comment above.
-    eth_removed = pool_eth * (1 - math.exp(-fum_to_redeem / (pool_eth * initial_eth_price_in_fum)))                 # Math: see closely analogous comment in burn_usm() above
+    eth_removed = fum_to_redeem / (initial_eth_price_in_fum + fum_to_redeem / pool_eth)                             # Math: see closely analogous comment in burn_usm() above
     assert debt_ratio(eth=pool_eth - eth_removed) <= MAX_DEBT_RATIO, "Redeeming {:,} FUM would leave the debt ratio above {:.0%}".format(fum_to_redeem, MAX_DEBT_RATIO)
     # Since we've disallowed redeem operations that would push us over MAX_DEBT_RATIO, we don't need to handle that case.  And a redeem can never pull us under MAX_DEBT_RATIO either, because it increases debt ratio.
     pool_eth_shrink_factor = (pool_eth - eth_removed) / pool_eth
-    set_fund_defund_adjustment(fund_defund_adjustment() * pool_eth_shrink_factor)
+    set_fund_defund_adjustment(fund_defund_adjustment() * pool_eth_shrink_factor**2)
     fum_holdings[user] -= fum_to_redeem
     pool_eth -= eth_removed
     return eth_removed
