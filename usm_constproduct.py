@@ -6,9 +6,9 @@ import traceback
 # ________________________________________ Constants ________________________________________
 
 # Parameters:
-MAX_DEBT_RATIO                      = 0.8           # Eg, if 1,000,000 USM are outstanding, users won't be able to redeem FUM unless the ETH pool's (mid) value is >= $1,000,000 / 0.8 = $1,250,000
-BUY_SELL_ADJUSTMENTS_HALF_LIFE      = 60            # Decay rate of our bid/ask related to recent buy/sell activity (eg, rate of buy price, pushed up by buys, dropping back towards oracle buy price): 1.5 -> 1.2247 -> 1.1067
-MIN_FUM_BUY_PRICE_HALF_LIFE         = 24 * 60 * 60  # min_fum_buy_price_in_eth() drops by 50% every day
+MAX_DEBT_RATIO                      = 0.8                   # Eg, if 1,000,000 USM are outstanding, users won't be able to redeem FUM unless the ETH pool's (mid) value is >= $1,000,000 / 0.8 = $1,250,000
+BUY_SELL_ADJUSTMENTS_HALF_LIFE      = 60                    # Decay rate of our bid/ask related to recent buy/sell activity (eg, rate of buy price, pushed up by buys, dropping back towards oracle buy price): 1.5 -> 1.2247 -> 1.1067
+MIN_FUM_BUY_PRICE_HALF_LIFE         = 24 * 60 * 60          # min_fum_buy_price_in_eth() drops by 50% every day
 
 # Price side constants:
 MID                                 = 'mid'
@@ -16,10 +16,11 @@ BUY                                 = 'buy'
 SELL                                = 'sell'
 
 # Gas-saving approximation constants:
-APPROXIMATE_TO_SAVE_GAS             = False         # Switch to True for less accurate, but (hopefully) more gas-efficient calculations
-SHIFT                               = 32            # Number of binary digits by which fixed-decimal inputs & outputs are shifted.
-ONE_TENTH_SHIFTED                   = 429496730
-HALF_TO_THE_ONE_TENTH_SHIFTED       = 4007346185
+APPROXIMATE_TO_SAVE_GAS             = False                 # Switch to True for less accurate, but (hopefully) more gas-efficient calculations
+SHIFT                               = 18                    # Number of decimal digits by which fixed-decimal inputs & outputs are shifted.
+ONE_SHIFTED                         = 10**SHIFT
+ONE_TENTH_SHIFTED                   = ONE_SHIFTED // 10
+HALF_TO_THE_ONE_TENTH_SHIFTED       = 933032991536807416    # Basically round(0.5**0.1 * ONE_SHIFTED), except Python doesn't calc that quite precisely so why not hardcode it here (using good old wolframalpha.com)
 
 
 # ________________________________________ State variables ________________________________________
@@ -30,11 +31,11 @@ oracle_eth_sell_price               = 198
 pool_eth                            = 0
 usm_holdings                        = {}
 fum_holdings                        = {}
-mint_burn_adjustment_stored         = 1             # Price multiplier based on recent mint/burn activity.  Eg, if A just did mint ops driving the ETH sell price down by 0.7x, and B just burned pushing the ETH buy price up by 1.2x, this factor will be 0.84.  Decays towards 1 over time.
+mint_burn_adjustment_stored         = 1                     # Price multiplier based on recent mint/burn activity.  Eg, if A just did mint ops driving the ETH sell price down by 0.7x, and B just burned pushing ETH buy price up 1.2x, this factor will be 0.84.  Decays towards 1 over time.
 mint_burn_adjustment_timestamp      = 0
-fund_defund_adjustment_stored       = 1             # Same as above, but for funds (increases factor)/defunds (decreases factor).
+fund_defund_adjustment_stored       = 1                     # Same as above, but for funds (increases factor)/defunds (decreases factor).
 fund_defund_adjustment_timestamp    = 0
-min_fum_buy_price_in_eth_stored     = 0             # Note that this price is in terms of ETH, not USD/USM.
+min_fum_buy_price_in_eth_stored     = 0                     # Note that this price is in terms of ETH, not USD/USM.
 min_fum_buy_price_timestamp         = 0
 
 
@@ -45,7 +46,7 @@ def main():
 
 def input_loop():
     while True:
-        set_min_fum_buy_price_in_eth_if_needed()    # The price calculation here technically may not quite right, because the theoretical FUM price increases (slightly) *during* many ops, as we collect fees...  But #letskeepitsimple
+        set_min_fum_buy_price_in_eth_if_needed()            # The price calculation here technically may not quite right, because the theoretical FUM price increases (slightly) *during* many ops, as we collect fees...  But #letskeepitsimple
         clear_min_fum_buy_price_if_obsolete()
         print(status_summary())
         print()
@@ -291,13 +292,13 @@ def min_fum_buy_price_in_eth():
     if min_fum_buy_price_timestamp is None:
         return 0
     elif APPROXIMATE_TO_SAVE_GAS:
-        return round(min_fum_buy_price_in_eth_stored * half_exp_approx(((time - min_fum_buy_price_timestamp) / MIN_FUM_BUY_PRICE_HALF_LIFE) * 2**SHIFT)) / 2**SHIFT
+        return round(min_fum_buy_price_in_eth_stored * half_exp_approx(((time - min_fum_buy_price_timestamp) / MIN_FUM_BUY_PRICE_HALF_LIFE) * ONE_SHIFTED)) / ONE_SHIFTED
     else:
         return min_fum_buy_price_in_eth_stored * (0.5 ** ((time - min_fum_buy_price_timestamp) / MIN_FUM_BUY_PRICE_HALF_LIFE))
 
 def mint_burn_adjustment():
     if APPROXIMATE_TO_SAVE_GAS:
-        power_approx = half_exp_approx(((time - mint_burn_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE) * 2**SHIFT, max_power=10) / 2**SHIFT
+        power_approx = half_exp_approx(((time - mint_burn_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE) * ONE_SHIFTED, max_power=10) / ONE_SHIFTED
         # Here we use the idea that for  0 < b <= 1 and 0 <= p <= 1, we can crudely approximate b**p by 1 - (1-b)p.  Eg: 0.6**0.5 pulls 0.6 "about halfway" to 1 (0.8); 0.6**0.25 pulls 0.6 "about 3/4 of the way" to 1 (0.9).  So b**p =~ b + (1-p)(1-b) = b + 1 - b - p + bp = 1 - (1-b)p:
         return 1 - (1 - mint_burn_adjustment_stored) * power_approx
     else:
@@ -305,7 +306,7 @@ def mint_burn_adjustment():
 
 def fund_defund_adjustment():
     if APPROXIMATE_TO_SAVE_GAS:
-        power_approx = half_exp_approx(((time - fund_defund_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE) * 2**SHIFT, max_power=10) / 2**SHIFT
+        power_approx = half_exp_approx(((time - fund_defund_adjustment_timestamp) / BUY_SELL_ADJUSTMENTS_HALF_LIFE) * ONE_SHIFTED, max_power=10) / ONE_SHIFTED
         # See parallel comment above:
         return 1 - (1 - fund_defund_adjustment_stored) * power_approx
     else:
@@ -315,7 +316,7 @@ def fund_defund_adjustment():
 
 def half_exp_approx(power_shifted, max_power=math.inf):
     """Returns a loose but "gas-efficient" approximation of 0.5**power, where:
-    1. Both input and output are in fixed-point format, shifted by SHIFT binary digits.  Eg, input power_shifted = 6012954214 represents power = 6012954214 / 2**32 = 1.4, so returns approx (0.5**1.4) * (2**32) = 1627488271
+    1. Both input and output are in fixed-point format, shifted by SHIFT decimal digits.  Eg, input power_shifted = 1400000000000000000 represents power = 1400000000000000000 / 10**18 = 1.4, so returns approx (0.5**1.4) * 10**18 = 378929141627599521
     2. power is rounded to the nearest 10th: power = 0.462 is treated as power = 0.5
     3. Large values of power (> max_power) just return 0, since 0.5**large_power =~ 0"""
     assert power_shifted >= 0
@@ -326,14 +327,14 @@ def half_exp_approx(power_shifted, max_power=math.inf):
         return half_to_the_one_tenth_exp_approx(power_in_tenths)
 
 def half_to_the_one_tenth_exp_approx(power):
-    """power is an unshifted, non-negative integer; return value is shifted, ie, multiplied by 2**SHIFT."""
+    """power is an unshifted, non-negative integer; return value is shifted, ie, multiplied by 10**SHIFT."""
     if power == 0:
-        return 1 << SHIFT
+        return ONE_SHIFTED
     else:
         sqrt = half_to_the_one_tenth_exp_approx(power // 2)
-        result = (sqrt * sqrt) >> SHIFT
+        result = (sqrt * sqrt) // ONE_SHIFTED
         if power % 2 == 1:
-            result = (result * HALF_TO_THE_ONE_TENTH_SHIFTED) >> SHIFT
+            result = (result * HALF_TO_THE_ONE_TENTH_SHIFTED) // ONE_SHIFTED
         return result
 
 
